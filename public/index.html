@@ -244,12 +244,21 @@ input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* the min() constraint */
 .bind { display: flex; flex-direction: column; gap: 8px; }
 .bindbars { display: flex; flex-direction: column; gap: 6px; }
-.bar { display: grid; grid-template-columns: 62px 1fr 56px; gap: 10px; align-items: center; font-size: 13px; }
+.bar { display: grid; grid-template-columns: 62px 1fr; gap: 10px; align-items: center; font-size: 13px; }
 .bar .lab { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
-.track { height: 12px; background: var(--rule); border-radius: 2px; overflow: hidden; }
-.fill { height: 100%; background: var(--ink-soft); }
+.track { position: relative; height: 20px; background: var(--rule); border-radius: 3px; }
+.fill { height: 100%; background: var(--ink-soft); border-radius: 3px; }
 .fill.binding { background: var(--accent); }
-.bar .num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; font-size: 13px; }
+/* the score sits at the end of its own bar; the ceiling sits at the end of the track */
+.bar .val, .bar .ceil {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+  font-size: 12px; white-space: nowrap; pointer-events: none;
+}
+.bar .val { color: var(--ink); }
+.bar .val.inside { color: var(--surface); }
+.bar .ceil { right: 7px; color: var(--ink-soft); }
+.bar .ceil.inside { color: var(--surface); }
 .note { font-size: 13px; color: var(--ink-soft); margin: 0; }
 .note b { color: var(--ink); font-weight: 500; }
 
@@ -422,13 +431,19 @@ a { color: var(--accent); }
       <div class="bindbars">
         <div class="bar">
           <span class="lab">PR + PG</span>
-          <div class="track"><div class="fill" id="barHw"></div></div>
-          <span class="num" id="numHw">—</span>
+          <div class="track">
+            <div class="fill" id="barHw"></div>
+            <span class="val" id="numHw">—</span>
+            <span class="ceil" id="ceilHw">720</span>
+          </div>
         </div>
         <div class="bar">
           <span class="lab">CH</span>
-          <div class="track"><div class="fill" id="barCh"></div></div>
-          <span class="num" id="numCh">—</span>
+          <div class="track">
+            <div class="fill" id="barCh"></div>
+            <span class="val" id="numCh">—</span>
+            <span class="ceil" id="ceilCh">720</span>
+          </div>
         </div>
       </div>
       <p class="note" id="bindNote"></p>
@@ -458,8 +473,10 @@ const CATS = [
   { id: 'PR', name: 'Practice Problems',    note: '',                   avail: 120, cap: 120, earned: 68,    graded: 80  },
   { id: 'PG', name: 'Programming Homework', note: '',                   avail: 600, cap: 600, earned: 297.5, graded: 350 },
   { id: 'CH', name: 'Checkins',             note: '720 of 780 counts',  avail: 780, cap: 720, earned: 408,   graded: 480 },
-  { id: 'AC', name: 'In-class Activities',  note: '0.5 each',           avail: 13,  cap: 13,  earned: 4.2,   graded: 6   },
-  { id: 'RC', name: 'Recitations',          note: '2 pts each · ~13 held', avail: 26, cap: 26,  earned: 14,    graded: 18  },
+  { id: 'AC', name: 'In-class Activities',  note: '0.5 pts each',       avail: 13, cap: 13, earned: 4.2, graded: 6 },
+  // Entered as sessions, not points: "7 attended of 9 held", 2 points each.
+  { id: 'RC', name: 'Recitations',          note: 'attended / held · 2 pts each',
+    avail: 15, cap: 30, pts: 2, earned: 7, graded: 9 },
 ];
 
 // AC and RC are one category in the syllabus: 39 points available, 30 of which
@@ -487,13 +504,19 @@ function model() {
   for (const c of CATS) { earned[c.id] = num('e_' + c.id); graded[c.id] = num('g_' + c.id); }
 
   let te = 0, tg = 0;
-  for (const c of CATS) { te += earned[c.id]; tg += graded[c.id]; }
+  for (const c of CATS) {
+    const pts = c.pts || 1;
+    te += earned[c.id] * pts;
+    tg += graded[c.id] * pts;
+  }
   const overall = tg > 0 ? te / tg : 0.9;
 
   const proj = {};
   for (const c of CATS) {
+    const pts = c.pts || 1;              // recitations are entered as sessions
     const rate = graded[c.id] > 0 ? earned[c.id] / graded[c.id] : overall;
-    proj[c.id] = Math.min(c.cap, earned[c.id] + rate * Math.max(0, c.avail - graded[c.id]));
+    const remaining = Math.max(0, c.avail - graded[c.id]);
+    proj[c.id] = Math.min(c.cap, (earned[c.id] + rate * remaining) * pts);
   }
 
   const hw = Math.min(proj.PR + proj.PG, 720);
@@ -507,9 +530,9 @@ function model() {
 
   // Standing on graded work alone, by the same formula.
   const gradedTotal = Math.min(earned.PR + earned.PG, earned.CH)
-                    + Math.min(AC_CAP, earned.AC + earned.RC);
+                    + Math.min(AC_CAP, earned.AC + earned.RC * 2);
   const gradedPoss = Math.min(graded.PR + graded.PG, graded.CH)
-                   + Math.min(AC_CAP, graded.AC + graded.RC);
+                   + Math.min(AC_CAP, graded.AC + graded.RC * 2);
 
   return { earned, graded, proj, hw, ch, ac, fi, total, overall,
            currentPct: gradedPoss > 0 ? (gradedTotal / gradedPoss) * 100 : null };
@@ -554,12 +577,29 @@ function render() {
   // full, and the top of the range is stretched where the scores actually sit.
   const hwBinds = m.hw <= m.ch;
   const barWidth = v => Math.min(100, Math.pow(Math.max(0, v) / 720, 3) * 100);
-  document.getElementById('barHw').style.width = barWidth(m.hw).toFixed(1) + '%';
-  document.getElementById('barCh').style.width = barWidth(m.ch).toFixed(1) + '%';
-  document.getElementById('barHw').className = 'fill' + (hwBinds ? ' binding' : '');
-  document.getElementById('barCh').className = 'fill' + (hwBinds ? '' : ' binding');
-  document.getElementById('numHw').textContent = round(m.hw);
-  document.getElementById('numCh').textContent = round(m.ch);
+  // Place each score at the end of its own bar. Past ~62% the label would run
+  // into the 720 at the end of the track, so it flips inside the fill instead.
+  const drawBar = (fillId, valId, ceilId, value, binding) => {
+    const w = barWidth(value);
+    const fill = document.getElementById(fillId);
+    const val = document.getElementById(valId);
+    const ceil = document.getElementById(ceilId);
+    fill.style.width = w.toFixed(1) + '%';
+    fill.className = 'fill' + (binding ? ' binding' : '');
+    val.textContent = round(value);
+    const inside = w > 62;
+    val.classList.toggle('inside', inside);
+    ceil.classList.toggle('inside', w > 93);
+    if (inside) {
+      val.style.left = 'auto';
+      val.style.right = `calc(${(100 - w).toFixed(1)}% + 7px)`;
+    } else {
+      val.style.right = 'auto';
+      val.style.left = `calc(${w.toFixed(1)}% + 7px)`;
+    }
+  };
+  drawBar('barHw', 'numHw', 'ceilHw', m.hw, hwBinds);
+  drawBar('barCh', 'numCh', 'ceilCh', m.ch, !hwBinds);
 
   const gap = round(Math.abs(m.hw - m.ch));
   document.getElementById('bindNote').textContent = gap < 0.05
