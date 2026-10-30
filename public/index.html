@@ -109,6 +109,9 @@ h2 {
 @media (max-width: 640px) { .imports { grid-template-columns: 1fr; } }
 .hint { color: var(--ink-soft); font-size: 13px; margin: 0 0 14px; }
 
+/* running notes under a section */
+.capnote { font-size: 12.5px; color: var(--ink-soft); margin: 10px 0 0; }
+
 /* import */
 .import {
   background: var(--surface);
@@ -120,12 +123,11 @@ h2 {
   gap: 10px;
 }
 /* Both cards carry two lines of instructions and end with a file picker, so
-   pin the text to the same height and push the controls to the bottom. The
-   two pickers then line up across the pair whatever sits between them. */
+   pin the text to the same height and push the controls to the bottom. */
 .import > p:first-child { min-height: 2.8em; }
 .import textarea { min-height: 3.4em; }
-.import .zero, .import .muted { margin-bottom: auto; }   /* sits under the blurb */
-.import .importrow { margin-top: auto; }                 /* picker to the bottom */
+.import .zero, .import .muted { margin-bottom: auto; }
+.import .importrow { margin-top: auto; }
 .import .status:empty { display: none; }
 .import p { margin: 0; font-size: 13px; color: var(--ink-soft); text-wrap: pretty; }
 .import kbd {
@@ -372,7 +374,7 @@ a { color: var(--accent); }
   <div class="imports">
   <section class="import">
     <p>On your Gradescope dashboard press <kbd>Ctrl</kbd>+<kbd>P</kbd>, save as PDF, then load it here to fill in PR, CH and&nbsp;Activities.</p>
-    <label class="zero"><input type="checkbox" id="countZero" checked> Skip the newest PR if it isn’t due yet</label>
+    <label class="zero"><input type="checkbox" id="countZero" checked> Latest PR isn’t due yet</label>
     <div class="importrow">
       <input type="file" id="pdf" accept="application/pdf,.pdf">
     </div>
@@ -397,6 +399,7 @@ a { color: var(--accent); }
         <span>Category</span><span>Earned</span><span>Graded</span><span>Projected</span>
       </div>
     </div>
+    <p class="capnote" id="acCap"></p>
   </section>
 
   <section class="verdict">
@@ -434,6 +437,7 @@ a { color: var(--accent); }
 
   <section class="solver">
     <h2>Final cutoffs</h2>
+    <p class="capnote" id="fiNote"></p>
     <table>
       <thead>
         <tr><th>Target</th><th>Cutoff</th><th>Final needed</th><th>As a %</th><th></th></tr>
@@ -444,19 +448,24 @@ a { color: var(--accent); }
 
   <footer>
     <p><b>Not official.</b> Courtesy of <a href="https://www.instagram.com/snairyboi/">@snairyboi</a>, CMU SCS ’30.</p>
-    <p>Activities also include Friday recitation activities worth 2 points each. Those are recorded on the instructor side and are not in the Gradescope export, so an import covers only the 0.5-point in-class activities.</p>
+    <p>The activities category also include Friday recitation attendance, worth 2 points each. Attendance is not accessible to students, so this forecaster primarily uses in-class projections for this category.</p>
   </footer>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
 const CATS = [
-  { id: 'PR', name: 'Practice Problems',    note: '',                  avail: 120, cap: 120, earned: 68,     graded: 80  },
-  { id: 'PG', name: 'Programming Homework', note: '',                  avail: 600, cap: 600, earned: 297.5,  graded: 350 },
-  { id: 'CH', name: 'Checkins',             note: '720 of 780 counts', avail: 780, cap: 720, earned: 408,    graded: 480 },
-  { id: 'AC', name: 'Activities',           note: '30 of 39 count · see note', avail: 39,  cap: 30,  earned: 5.6,    graded: 8   },
-  { id: 'FI', name: 'Final Exam',           note: 'closed book',       avail: 250, cap: 250, earned: 0,      graded: 0   },
+  { id: 'PR', name: 'Practice Problems',    note: '',                   avail: 120, cap: 120, earned: 68,    graded: 80  },
+  { id: 'PG', name: 'Programming Homework', note: '',                   avail: 600, cap: 600, earned: 297.5, graded: 350 },
+  { id: 'CH', name: 'Checkins',             note: '720 of 780 counts',  avail: 780, cap: 720, earned: 408,   graded: 480 },
+  { id: 'AC', name: 'In-class Activities',  note: '0.5 each',           avail: 13,  cap: 13,  earned: 4.2,   graded: 6   },
+  { id: 'RC', name: 'Recitations',          note: '2 pts each · ~13 held', avail: 26, cap: 26,  earned: 14,    graded: 18  },
 ];
+
+// AC and RC are one category in the syllabus: 39 points available, 30 of which
+// count. They are split here because only the in-class half is visible on
+// Gradescope -- attendance has to be entered by hand.
+const AC_CAP = 30;
 
 const sheet = document.getElementById('sheet');
 for (const c of CATS) {
@@ -477,27 +486,32 @@ function model() {
   const earned = {}, graded = {};
   for (const c of CATS) { earned[c.id] = num('e_' + c.id); graded[c.id] = num('g_' + c.id); }
 
-  // Overall rate, used for a category with nothing graded yet (typically the final).
   let te = 0, tg = 0;
-  for (const c of CATS) { if (c.id !== 'FI') { te += earned[c.id]; tg += graded[c.id]; } }
+  for (const c of CATS) { te += earned[c.id]; tg += graded[c.id]; }
   const overall = tg > 0 ? te / tg : 0.9;
 
   const proj = {};
   for (const c of CATS) {
     const rate = graded[c.id] > 0 ? earned[c.id] / graded[c.id] : overall;
-    const remaining = Math.max(0, c.avail - graded[c.id]);
-    proj[c.id] = Math.min(c.cap, earned[c.id] + rate * remaining);
+    proj[c.id] = Math.min(c.cap, earned[c.id] + rate * Math.max(0, c.avail - graded[c.id]));
   }
 
   const hw = Math.min(proj.PR + proj.PG, 720);
   const ch = proj.CH;
-  const total = Math.min(hw, ch) + proj.AC + proj.FI;
+  const ac = Math.min(AC_CAP, proj.AC + proj.RC);
 
-  // Standing on graded work alone: same formula, scaled by what's been released.
-  const gradedTotal = Math.min(earned.PR + earned.PG, earned.CH) + earned.AC + earned.FI;
-  const gradedPoss = Math.min(graded.PR + graded.PG, graded.CH) + graded.AC + graded.FI;
+  // The final has no input of its own: it is projected at the rate set by
+  // everything else, and the cutoff table below solves for it directly.
+  const fi = overall * 250;
+  const total = Math.min(hw, ch) + ac + fi;
 
-  return { earned, graded, proj, hw, ch, total, overall,
+  // Standing on graded work alone, by the same formula.
+  const gradedTotal = Math.min(earned.PR + earned.PG, earned.CH)
+                    + Math.min(AC_CAP, earned.AC + earned.RC);
+  const gradedPoss = Math.min(graded.PR + graded.PG, graded.CH)
+                   + Math.min(AC_CAP, graded.AC + graded.RC);
+
+  return { earned, graded, proj, hw, ch, ac, fi, total, overall,
            currentPct: gradedPoss > 0 ? (gradedTotal / gradedPoss) * 100 : null };
 }
 
@@ -514,6 +528,19 @@ function render() {
 
   for (const c of CATS) {
     document.getElementById('p_' + c.id).textContent = `${round(m.proj[c.id])} / ${c.cap}`;
+  }
+
+  const acNote = document.getElementById('acCap');
+  if (acNote) {
+    acNote.textContent =
+      `Activities and recitations together: ${round(m.ac)} / ${AC_CAP} counted` +
+      (m.proj.AC + m.proj.RC > AC_CAP
+        ? ` (${round(m.proj.AC + m.proj.RC)} projected, capped)` : '');
+  }
+  const fiNote = document.getElementById('fiNote');
+  if (fiNote) {
+    fiNote.textContent =
+      `Final projected at ${round(m.fi)} / 250 from your rate elsewhere.`;
   }
 
   const pct = m.total / 10;
@@ -542,7 +569,7 @@ function render() {
       : `Checkins are the binding side, by ${gap} points.`;
 
   // Final-exam solver: hold everything but FI at its projection.
-  const base = Math.min(m.hw, m.ch) + m.proj.AC;
+  const base = Math.min(m.hw, m.ch) + m.ac;
   const rows = [['A', 900], ['B', 800], ['C', 700], ['D', 600]];
   document.getElementById('solver').innerHTML = rows.map(([L, need]) => {
     const fi = need - base;
