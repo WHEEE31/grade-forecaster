@@ -637,76 +637,214 @@ render();
   const scrollLayer = document.getElementById('ducksScroll');
   if (!layer) return;
 
-  let seed = 15122;
-  const rnd = () => {                       // mulberry32
-    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
-    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+  const SCATTER = ['honk-a', 'honk-c', 'chonk-a', 'chonk-b'];
+  const PEEK = ['honk-b', 'chonk-c'];
+
+  // One seed per page load: the flock is new on every visit, but stays put
+  // while you are on the page, since resizing re-runs the placement.
+  const SEED = (Math.random() * 0x7fffffff) | 0;
+
+  const mulberry = s => () => {
+    s |= 0; s = s + 0x6D2B79F5 | 0;
+    let t = Math.imul(s ^ s >>> 15, 1 | s);
     t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
     return ((t ^ t >>> 14) >>> 0) / 4294967296;
   };
-  const pick = a => a[Math.floor(rnd() * a.length)];
-  const between = (lo, hi) => lo + rnd() * (hi - lo);
 
-  const SCATTER = ['honk-a', 'honk-c', 'chonk-a', 'chonk-b'];
-  const PEEK = ['honk-b', 'chonk-c'];
-  const ALL = SCATTER.concat(PEEK);
-
-  const add = (host, id, left, top, size, rot, opacity) => {
+  // Place a duck from a box in px, so overlap and coverage can be measured in
+  // the same units the layout uses, then convert to percentages for the style.
+  const mk = (host, id, box, rot, opacity, flip) => {
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     el.setAttribute('class', 'duck');
     el.setAttribute('viewBox', '0 0 125 125');
     el.style.cssText =
-      `left:${left}%;top:${top}%;width:${size}px;height:${size}px;` +
-      `transform:rotate(${rot}deg);opacity:${opacity}`;
-    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
-    use.setAttribute('href', '#' + id);
-    el.appendChild(use);
-    host.appendChild(el);
+      `left:${(box.x / host.w * 100).toFixed(2)}%;` +
+      `top:${(box.y / host.h * 100).toFixed(2)}%;` +
+      `width:${box.s}px;height:${box.s}px;` +
+      `transform:rotate(${rot}deg)${flip ? ' scaleX(-1)' : ''};opacity:${opacity}`;
+    const src = document.getElementById(id);
+    if (src) for (const node of src.children) el.appendChild(node.cloneNode(true));
+    host.el.appendChild(el);
   };
 
-  // --- fixed layer: covers the whole viewport, including behind the text ---
-  // Three columns by eight rows, jittered. The middle column runs fainter so
-  // it never competes with what is written on top of it.
-  const ROWS = 8, COLS = [[-3, 24], [30, 62], [70, 97]];
-  for (let r = 0; r < ROWS; r++) {
-    for (let c = 0; c < COLS.length; c++) {
-      const middle = c === 1;
-      add(layer, pick(SCATTER),
-          between(COLS[c][0], COLS[c][1]),
-          r * (96 / ROWS) + between(0, 96 / ROWS - 8),
-          between(46, 92),
-          between(-30, 30),
-          (middle ? between(0.05, 0.09) : between(0.11, 0.2)).toFixed(3));
+  const hits = (a, b) =>            // boxes overlap at all
+    a.x < b.x + b.s && a.x + a.s > b.x && a.y < b.y + b.s && a.y + a.s > b.y;
+
+  // How much of the duck is hidden, counting every element at once. Taking
+  // the largest single overlap instead let a duck sit in the gap between two
+  // cards -- under the limit for each, nearly invisible in total. Sampled on
+  // a grid because the union of overlapping rectangles has no neat formula.
+  const coveredFraction = (box, rects) => {
+    const N = 12;
+    let hidden = 0;
+    for (let i = 0; i < N; i++) {
+      const px = box.x + (i + 0.5) * box.s / N;
+      for (let j = 0; j < N; j++) {
+        const py = box.y + (j + 0.5) * box.s / N;
+        for (const r of rects) {
+          if (px >= r.left && px <= r.right && py >= r.top && py <= r.bottom) {
+            hidden++;
+            break;
+          }
+        }
+      }
     }
-  }
+    return hidden / (N * N);
+  };
 
-  // peekers, pinned half off each edge
-  for (let i = 0; i < 6; i++) {
-    const leftSide = i % 2 === 0;
-    add(layer, pick(PEEK),
-        leftSide ? between(-6, -3) : between(94, 99),
-        Math.floor(i / 2) * 30 + between(6, 20),
-        between(68, 108),
-        leftSide ? between(8, 22) : between(-22, -8),
-        between(0.14, 0.22).toFixed(3));
-  }
+  // --- fixed layer: whole viewport, nothing touching anything else ---
+  function placeFixed() {
+    const rnd = mulberry(SEED);
+    const between = (lo, hi) => lo + rnd() * (hi - lo);
+    const pick = a => a[Math.floor(rnd() * a.length)];
+    const host = { el: layer, w: layer.clientWidth || innerWidth,
+                   h: layer.clientHeight || innerHeight };
+    layer.textContent = '';
+    const placed = [];
 
-  // --- scrolling layer: sparse, bigger, and bright enough to read as colour ---
-  if (scrollLayer) {
-    const sizeLayer = () => {
-      scrollLayer.style.height = document.documentElement.scrollHeight + 'px';
+    const tryPlace = (id, xRange, yRange, sRange, rot, op, flip) => {
+      for (let attempt = 0; attempt < 40; attempt++) {
+        const s = between(sRange[0], sRange[1]);
+        const box = { x: between(xRange[0], xRange[1]) / 100 * host.w,
+                      y: between(yRange[0], yRange[1]) / 100 * host.h, s };
+        if (placed.some(p => hits(box, p))) continue;
+        placed.push(box);
+        mk(host, id, box, rot, op, flip);
+        return;
+      }
     };
-    for (let i = 0; i < 8; i++) {
-      add(scrollLayer, pick(ALL),
-          between(2, 86),
-          i * 12 + between(1, 7),
-          between(70, 128),
-          between(-32, 32),
-          between(0.3, 0.46).toFixed(3));
+
+    const ROWS = 8, COLS = [[-4, 26], [28, 64], [68, 98]], CELL = 100 / ROWS;
+    for (let r = 0; r < ROWS; r++) {
+      for (let c = 0; c < COLS.length; c++) {
+        const middle = c === 1;
+        tryPlace(pick(SCATTER), COLS[c], [r * CELL - 3, r * CELL + CELL - 3],
+                 [46, 92], between(0, 360),
+                 (middle ? between(0.025, 0.045) : between(0.055, 0.10)).toFixed(3),
+                 rnd() < 0.5);
+      }
     }
-    sizeLayer();
-    addEventListener('resize', sizeLayer);
-    if (window.ResizeObserver) new ResizeObserver(sizeLayer).observe(document.body);
+    for (let i = 0; i < 6; i++) {
+      const leftSide = i % 2 === 0;
+      tryPlace(pick(PEEK), leftSide ? [-3.5, -0.5] : [91.5, 96.5],
+               [Math.floor(i / 2) * 32 + 4, Math.floor(i / 2) * 32 + 24],
+               // At a screen edge the hider is the area off-screen, so the
+               // feet point out past the edge and the head faces into the
+               // page -- the opposite of a duck peeking from behind a card.
+               [68, 108], leftSide ? 90 : -90,
+               between(0.07, 0.11).toFixed(3), false);
+    }
+  }
+
+  // --- scrolling layer: 8 ducks, a few of them peeking out from real elements
+  function placeScroll() {
+    if (!scrollLayer) return;
+    const rnd = mulberry(SEED ^ 0x5f3759df);
+    const between = (lo, hi) => lo + rnd() * (hi - lo);
+    const pick = a => a[Math.floor(rnd() * a.length)];
+
+    scrollLayer.style.height = document.documentElement.scrollHeight + 'px';
+    scrollLayer.textContent = '';
+    const host = { el: scrollLayer, w: scrollLayer.clientWidth || innerWidth,
+                   h: parseFloat(scrollLayer.style.height) };
+
+    const boxOf = el => {
+      const r = el.getBoundingClientRect();
+      return { left: r.left + scrollX, right: r.right + scrollX,
+               top: r.top + scrollY, bottom: r.bottom + scrollY };
+    };
+    const real = r => r.right > r.left && r.bottom > r.top;
+
+    // Peekers can only hide behind something that actually paints a
+    // background. The worksheet is just rows and rules, so a duck tucked
+    // "behind" it is not hidden at all -- it reads as floating in the gap.
+    const solid = [...document.querySelectorAll('.import, .verdict')]
+      .map(boxOf).filter(real);
+
+    // Coverage is judged against everything carrying text, solid or not.
+    const rects = [...document.querySelectorAll('.import, .verdict, .sheet, .formula, footer, .solver table')]
+      .map(boxOf).filter(real);
+
+    const placed = [];
+    const TOTAL = 8;
+    const peekers = solid.length ? Math.round(between(1, 3)) : 0;
+    let peeked = 0;
+
+    // Peekers first: each one straddles one edge of a real element, so the
+    // element hides part of it. Rotation follows that edge instead of chance.
+    const EDGES = [
+      { name: 'top',   rot: 0 },    // above the element, feet behind it
+      { name: 'left',  rot: -90 },  // left of it, feet pointing right into it
+      { name: 'right', rot: 90 },   // right of it, feet pointing left into it
+    ];
+    for (let i = 0; i < peekers; i++) {
+      for (let attempt = 0; attempt < 30; attempt++) {
+        const r = pick(solid);
+        const edge = pick(EDGES);
+        const s = between(75, 110);
+        const out = s * between(0.52, 0.68);     // most of it stays outside
+        let box;
+        if (edge.name === 'top')    box = { x: between(r.left, r.right - s), y: r.top - out, s };
+        if (edge.name === 'left')   box = { x: r.left - out, y: between(r.top, r.bottom - s), s };
+        if (edge.name === 'right')  box = { x: r.right - (s - out), y: between(r.top, r.bottom - s), s };
+        if (!box || box.x < 0 || box.x + s > host.w || box.y < 0) continue;
+        if (placed.some(p => hits(box, p))) continue;
+        // its own card should hide the feet; anything else is in the way
+        const others = rects.filter(o => o !== r);
+        if (coveredFraction(box, others) > 0.15) continue;
+        placed.push(box);
+        peeked++;
+        mk(host, pick(PEEK), box, edge.rot,
+           between(0.24, 0.37).toFixed(3), false);
+        break;
+      }
+    }
+
+    // A page with no peeker at all loses the point of the flock, so if every
+    // attempt above was rejected, try again against the largest card with the
+    // other-element limit dropped.
+    if (solid.length && peeked === 0) {
+      const r = solid.reduce((a, b) =>
+        (b.right - b.left) * (b.bottom - b.top) > (a.right - a.left) * (a.bottom - a.top) ? b : a);
+      const s2 = between(75, 102);
+      const box = { x: Math.max(4, (r.left + r.right) / 2 - s2 / 2),
+                    y: r.top - s2 * 0.6, s: s2 };
+      if (box.y > 0) {
+        placed.push(box);
+        peeked++;
+        mk(host, pick(PEEK), box, 0, between(0.24, 0.37).toFixed(3), false);
+      }
+    }
+
+    // The rest: anywhere, so long as they miss each other and stay at least
+    // 20% clear of any element.
+    while (placed.length < TOTAL) {
+      let done = false;
+      for (let attempt = 0; attempt < 60 && !done; attempt++) {
+        const s = between(36, 58);
+        const box = { x: between(0, Math.max(1, host.w - s)),
+                      y: between(0, Math.max(1, host.h - s)), s };
+        if (placed.some(p => hits(box, p))) continue;
+        if (coveredFraction(box, rects) > 0.2) continue;   // keep clear of the cards
+        placed.push(box);
+        mk(host, pick(SCATTER), box, between(0, 360),
+           between(0.24, 0.37).toFixed(3), rnd() < 0.5);
+        done = true;
+      }
+      if (!done) break;                 // no room left; stop rather than loop
+    }
+  }
+
+  const draw = () => { placeFixed(); placeScroll(); };
+  draw();
+  addEventListener('load', draw);
+  addEventListener('resize', draw);
+  if (window.ResizeObserver) {
+    let last = 0;
+    new ResizeObserver(() => {
+      const h = document.documentElement.scrollHeight;
+      if (Math.abs(h - last) > 24) { last = h; placeScroll(); }
+    }).observe(document.body);
   }
 })();
 
