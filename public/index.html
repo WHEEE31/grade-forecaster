@@ -1,0 +1,853 @@
+<title>CMU 15-122 Grade Forecaster</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+
+<style>
+/* Layout: single column, ledger-style. Inputs on the left as a worksheet,
+   the min() constraint and projection stacked beneath as the verdict. */
+:root {
+  --paper:      #fbf7f0;
+  --surface:    #ffffff;
+  --ink:        #221f1c;
+  --ink-soft:   #6f665b;
+  --rule:       #e7ded0;
+  --accent:     #d1811f;
+  --accent-dim: #f7ead6;
+  --good:       #3c6b45;
+  --warn:       #a35f16;
+
+  --body: "IBM Plex Sans", system-ui, -apple-system, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --paper:      #17150f;
+    --surface:    #201d16;
+    --ink:        #ece6da;
+    --ink-soft:   #a09685;
+    --rule:       #342f24;
+    --accent:     #eda447;
+    --accent-dim: #2d2415;
+    --good:       #8cbf93;
+    --warn:       #d6a24a;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --paper:      #17150f;
+  --surface:    #201d16;
+  --ink:        #ece6da;
+  --ink-soft:   #a09685;
+  --rule:       #342f24;
+  --accent:     #eda447;
+  --accent-dim: #2d2415;
+  --good:       #8cbf93;
+  --warn:       #d6a24a;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+/* Honk and Chonk, scattered behind everything. Fixed so they read as a
+   watermark rather than scrolling furniture, and inert to the pointer. */
+.ducks { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+.duck { position: absolute; color: var(--ink); }
+.duck .i { fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.duck .b { fill: var(--accent); stroke: currentColor; stroke-width: 2.5; stroke-linejoin: round; }
+.duck .h { fill: currentColor; stroke: currentColor; stroke-width: 2.5; stroke-linejoin: round; }
+.duck .e { fill: currentColor; stroke: none; }
+@media (prefers-reduced-motion: no-preference) { .duck { transition: opacity .4s ease; } }
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--body);
+  font-size: 15px;
+  line-height: 1.5;
+  margin: 0;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 32px 64px;
+}
+
+.wrap { position: relative; z-index: 1; max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 28px; }
+
+header { display: flex; flex-direction: column; gap: 6px; }
+h1 {
+  font-family: var(--mono);
+  font-size: clamp(24px, 5.2vw, 32px);
+  font-weight: 500;
+  letter-spacing: -0.02em;
+  margin: 0;
+  text-wrap: balance;
+}
+.sub { color: var(--ink-soft); font-size: 14px; max-width: 60ch; margin: 0; }
+
+.formula {
+  font-family: var(--mono);
+  font-size: 13px;
+  background: var(--accent-dim);
+  color: var(--ink);
+  padding: 10px 14px;
+  border-radius: 3px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+h2 {
+  font-family: var(--body);
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  margin: 0 0 2px;
+}
+
+/* the two importers sit side by side on wide screens */
+.imports { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: stretch; }
+@media (max-width: 640px) { .imports { grid-template-columns: 1fr; } }
+.hint { color: var(--ink-soft); font-size: 13px; margin: 0 0 14px; }
+
+/* import */
+.import {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 14px 16px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+/* Both cards carry two lines of instructions and end with a file picker, so
+   pin the text to the same height and push the controls to the bottom. The
+   two pickers then line up across the pair whatever sits between them. */
+.import > p:first-child { min-height: 2.8em; }
+.import textarea { min-height: 3.4em; }
+.import .zero, .import .muted { margin-bottom: auto; }   /* sits under the blurb */
+.import .importrow { margin-top: auto; }                 /* picker to the bottom */
+.import .status:empty { display: none; }
+.import p { margin: 0; font-size: 13px; color: var(--ink-soft); text-wrap: pretty; }
+.import kbd {
+  font-family: var(--mono);
+  font-size: 12px;
+  border: 1px solid var(--rule);
+  border-bottom-width: 2px;
+  border-radius: 3px;
+  padding: 1px 4px;
+  color: var(--ink);
+}
+.importrow { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+input[type="file"] { font-family: var(--body); font-size: 13px; color: var(--ink-soft); min-width: 0; }
+input[type="file"]::file-selector-button {
+  font-family: var(--body);
+  font-size: 13px;
+  padding: 6px 12px;
+  margin-right: 10px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--ink);
+  cursor: pointer;
+}
+input[type="file"]::file-selector-button:hover { border-color: var(--accent); color: var(--accent); }
+.zero { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink-soft); cursor: pointer; }
+.zero input { accent-color: var(--accent); }
+textarea {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 12.5px;
+  line-height: 1.45;
+  padding: 9px 10px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--paper);
+  color: var(--ink);
+  resize: vertical;
+}
+textarea:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.muted { font-size: 13px; color: var(--ink-soft); }
+.status { font-size: 13px; margin: 0; }
+.status.ok { color: var(--good); }
+.status.err { color: var(--warn); }
+
+/* worksheet */
+.sheet { display: flex; flex-direction: column; gap: 0; border-top: 1px solid var(--rule); }
+.row {
+  display: grid;
+  grid-template-columns: 1fr 86px 86px 96px;
+  gap: 10px;
+  align-items: center;
+  padding: 11px 0;
+  border-bottom: 1px solid var(--rule);
+  min-width: 0;
+}
+.row.head {
+  padding-bottom: 6px;
+  font-size: 11px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  border-bottom: 1px solid var(--rule);
+}
+.row.head span:not(:first-child) { text-align: right; }
+.cat { display: flex; flex-direction: column; min-width: 0; }
+.cat b { font-weight: 500; }
+.cat small { color: var(--ink-soft); font-size: 12px; }
+input[type="number"] {
+  width: 100%;
+  font-family: var(--mono);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  padding: 7px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--surface);
+  color: var(--ink);
+}
+input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.proj {
+  font-family: var(--mono);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  color: var(--ink-soft);
+  white-space: nowrap;   /* keep "115.1 / 120" on one line in every row */
+}
+
+/* verdict */
+.verdict {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.score { display: flex; flex-wrap: wrap; gap: 28px; align-items: baseline; }
+.score > div { display: flex; flex-direction: column; gap: 2px; }
+.score .k { font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--ink-soft); }
+.score .v {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 34px;
+  font-weight: 500;
+  line-height: 1;
+}
+.score .v.letter { color: var(--accent); }
+.score .v.small { font-size: 22px; }
+
+/* the min() constraint */
+.bind { display: flex; flex-direction: column; gap: 8px; }
+.bindbars { display: flex; flex-direction: column; gap: 6px; }
+.bar { display: grid; grid-template-columns: 62px 1fr 56px; gap: 10px; align-items: center; font-size: 13px; }
+.bar .lab { font-family: var(--mono); font-size: 12px; color: var(--ink-soft); }
+.track { height: 12px; background: var(--rule); border-radius: 2px; overflow: hidden; }
+.fill { height: 100%; background: var(--ink-soft); }
+.fill.binding { background: var(--accent); }
+.bar .num { font-family: var(--mono); font-variant-numeric: tabular-nums; text-align: right; font-size: 13px; }
+.note { font-size: 13px; color: var(--ink-soft); margin: 0; }
+.note b { color: var(--ink); font-weight: 500; }
+
+/* final solver */
+.solver { display: flex; flex-direction: column; gap: 10px; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: right; padding: 7px 4px; border-bottom: 1px solid var(--rule); }
+th:first-child, td:first-child { text-align: left; }
+th { font-size: 11px; letter-spacing: 0.07em; text-transform: uppercase; color: var(--ink-soft); font-weight: 500; }
+td.n { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+td.ok { color: var(--good); }
+td.no { color: var(--warn); }
+
+footer { font-size: 12.5px; color: var(--ink-soft); border-top: 1px solid var(--rule); padding-top: 16px; }
+footer p { margin: 0 0 6px; }
+a { color: var(--accent); }
+
+@media (max-width: 560px) {
+  .row { grid-template-columns: 1fr 70px 70px; row-gap: 6px; }
+  .row .proj { grid-column: 1 / -1; text-align: left; }
+  .row.head span:nth-child(4) { display: none; }
+  .row.head { grid-template-columns: 1fr 70px 70px; }
+}
+</style>
+
+<svg width="0" height="0" aria-hidden="true" style="position:absolute">
+    <symbol id="honk-a" viewBox="0 0 125 125">
+      <!-- body -->
+      <path class="i" d="M36 86 C24 74 30 56 50 52 C70 48 88 54 94 66 C100 78 92 92 74 95 C56 98 44 95 36 86 Z"/>
+      <!-- tail -->
+      <path class="i" d="M92 62 L108 56 L97 73"/>
+      <!-- wing -->
+      <path class="i" d="M52 68 C62 62 78 64 84 74"/>
+      <!-- neck -->
+      <path class="i" d="M50 62 C39 52 38 36 46 30"/>
+      <!-- head -->
+      <ellipse class="i" cx="45" cy="25" rx="10.5" ry="9.5"/>
+      <!-- beak -->
+      <path class="b" d="M35 22 L18 26 L35 31 Z"/>
+      <!-- beret -->
+      <path class="h" d="M31 17 C35 4 59 6 56 17 C48 12 38 12 31 17 Z"/>
+      <circle class="h" cx="56" cy="5" r="2.6"/>
+      <circle class="e" cx="47" cy="22" r="1.8"/>
+      <!-- legs + webbed feet -->
+      <path class="i" d="M56 94 L54 106"/>
+      <path class="i" d="M74 94 L74 106"/>
+      <path class="b" d="M54 106 L44 112 L62 112 Z"/>
+      <path class="b" d="M74 106 L64 112 L82 112 Z"/>
+    </symbol>
+    <symbol id="honk-b" viewBox="0 0 125 125">
+      <!-- one continuous silhouette: shoulders up the neck, round the head, back down -->
+      <path class="i" d="M20 118 C22 94 38 84 50 79 C53 69 52 58 50 51
+      C44 45 45 27 62 24 C79 27 80 45 74 51
+      C72 58 71 69 74 79 C86 84 102 94 104 118"/>
+      <path class="b" d="M47 36 L20 42 L47 50 Z"/>
+      <path class="h" d="M43 27 C46 5 81 9 78 25 C67 18 53 19 43 27 Z"/>
+      <circle class="h" cx="79" cy="8" r="3.2"/>
+      <circle class="e" cx="66" cy="35" r="2.2"/>
+    </symbol>
+    <symbol id="honk-c" viewBox="0 0 125 125">
+      <path class="i" d="M32 80 C22 66 32 50 52 48 C74 46 92 54 96 68 C100 82 88 94 68 95 C50 96 40 92 32 80 Z"/>
+      <path class="i" d="M96 58 L112 50 L102 68"/>
+      <!-- lifted wing -->
+      <path class="i" d="M56 62 C64 48 82 46 90 56 C80 62 68 64 56 62 Z"/>
+      <path class="i" d="M48 58 C40 46 42 32 52 26"/>
+      <ellipse class="i" cx="52" cy="22" rx="10.5" ry="9.5"/>
+      <path class="b" d="M42 19 L25 23 L42 28 Z"/>
+      <path class="h" d="M38 14 C42 1 66 3 63 14 C55 9 45 9 38 14 Z"/>
+      <circle class="h" cx="63" cy="2" r="2.6"/>
+      <circle class="e" cx="54" cy="19" r="1.8"/>
+      <path class="i" d="M54 94 L48 106"/>
+      <path class="i" d="M74 94 L78 106"/>
+      <path class="b" d="M48 106 L38 112 L56 112 Z"/>
+      <path class="b" d="M78 106 L70 112 L88 112 Z"/>
+    </symbol>
+    <symbol id="chonk-a" viewBox="0 0 125 125">
+      <path class="i" d="M60 34 C88 34 100 58 98 78 C96 98 80 106 60 106 C40 106 24 98 22 78 C20 58 32 34 60 34 Z"/>
+      <circle class="i" cx="60" cy="34" r="19"/>
+      <path class="b" d="M47 40 C47 51 73 51 73 40 C73 34 47 34 47 40 Z"/>
+      <circle class="e" cx="52" cy="30" r="2"/>
+      <circle class="e" cx="68" cy="30" r="2"/>
+      <path class="i" d="M28 68 C30 82 36 92 44 98"/>
+      <path class="i" d="M92 68 C90 82 84 92 76 98"/>
+      <path class="b" d="M48 100 C36 106 20 122 42 122 C58 122 58 110 56 100 Z"/>
+      <path class="b" d="M72 100 C84 106 100 122 78 122 C62 122 62 110 64 100 Z"/>
+    </symbol>
+    <symbol id="chonk-b" viewBox="0 0 125 125">
+      <!-- body -->
+      <path class="i" d="M52 46 C80 40 104 58 102 80 C100 100 74 110 52 102 C32 95 26 72 34 58 C38 51 46 47 52 46 Z"/>
+      <!-- tail nub -->
+      <path class="i" d="M100 72 C108 68 112 70 112 76"/>
+      <!-- head -->
+      <circle class="i" cx="50" cy="40" r="18"/>
+      <path class="b" d="M34 36 C20 34 14 42 22 48 C30 54 40 50 41 42 Z"/>
+      <circle class="e" cx="54" cy="33" r="2.2"/>
+      <!-- wing -->
+      <path class="i" d="M58 66 C70 62 86 68 90 80 C78 80 66 74 58 66 Z"/>
+      <!-- big feet, pointing forward -->
+      <path class="b" d="M42 98 C26 102 10 114 34 118 C52 120 56 108 54 98 Z"/>
+      <path class="b" d="M64 100 C52 108 44 120 66 120 C82 120 80 108 78 99 Z"/>
+    </symbol>
+    <symbol id="chonk-c" viewBox="0 0 125 125">
+      <path class="i" d="M24 112 C24 78 42 56 64 56 C86 56 104 78 104 112"/>
+      <circle class="i" cx="64" cy="54" r="26"/>
+      <path class="b" d="M46 62 C46 78 82 78 82 62 C82 54 46 54 46 62 Z"/>
+      <circle class="e" cx="54" cy="47" r="2.6"/>
+      <circle class="e" cx="74" cy="47" r="2.6"/>
+      <path class="i" d="M30 96 C36 100 42 102 48 102"/>
+      <path class="i" d="M98 96 C92 100 86 102 80 102"/>
+    </symbol>
+</svg>
+<div class="ducks" id="ducks" aria-hidden="true"></div>
+
+<div class="wrap">
+
+  <header>
+    <h1>CMU 15-122 Grade Forecaster</h1>
+  </header>
+
+  <div class="formula">performance = min(PR + PG, CH) + AC + FI&nbsp;&nbsp;→&nbsp;&nbsp;percentage = performance / 10</div>
+
+  <div class="imports">
+  <section class="import">
+    <p>On your Gradescope dashboard press <kbd>Ctrl</kbd>+<kbd>P</kbd>, save as PDF, then load it here to fill in PR, CH and&nbsp;Activities.</p>
+    <label class="zero"><input type="checkbox" id="countZero" checked> Count “No Submission” as 0</label>
+    <div class="importrow">
+      <input type="file" id="pdf" accept="application/pdf,.pdf">
+    </div>
+    <p class="status" id="status"></p>
+  </section>
+
+  <section class="import">
+    <p>In Autolab → 15-122 → Gradebook, select the Programming Assignments table, copy it, and&nbsp;paste&nbsp;below.</p>
+    <textarea id="pgPaste" rows="2" placeholder="Paste the table here"></textarea>
+    <span class="muted">… or a PDF of the page</span>
+    <div class="importrow">
+      <input type="file" id="pgPdf" accept="application/pdf,.pdf">
+    </div>
+    <p class="status" id="pgStatus"></p>
+  </section>
+  </div>
+
+  <section>
+    <h2>Your points</h2>
+    <div class="sheet" id="sheet">
+      <div class="row head">
+        <span>Category</span><span>Earned</span><span>Graded</span><span>Projected</span>
+      </div>
+    </div>
+  </section>
+
+  <section class="verdict">
+    <div class="score">
+      <div>
+        <span class="k">Projected</span>
+        <span class="v" id="pct">—</span>
+      </div>
+      <div>
+        <span class="k">Rough letter</span>
+        <span class="v letter" id="letter">—</span>
+      </div>
+      <div>
+        <span class="k">On graded work only</span>
+        <span class="v small" id="current">—</span>
+      </div>
+    </div>
+
+    <div class="bind">
+      <div class="bindbars">
+        <div class="bar">
+          <span class="lab">PR + PG</span>
+          <div class="track"><div class="fill" id="barHw"></div></div>
+          <span class="num" id="numHw">—</span>
+        </div>
+        <div class="bar">
+          <span class="lab">CH</span>
+          <div class="track"><div class="fill" id="barCh"></div></div>
+          <span class="num" id="numCh">—</span>
+        </div>
+      </div>
+      <p class="note" id="bindNote"></p>
+    </div>
+  </section>
+
+  <section class="solver">
+    <h2>Final cutoffs</h2>
+    <table>
+      <thead>
+        <tr><th>Target</th><th>Cutoff</th><th>Final needed</th><th>As a %</th><th></th></tr>
+      </thead>
+      <tbody id="solver"></tbody>
+    </table>
+  </section>
+
+  <footer>
+    <p><b>Not official.</b> Courtesy of <a href="https://www.instagram.com/snairyboi/">@snairyboi</a>, CMU SCS ’30.</p>
+  </footer>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script>
+const CATS = [
+  { id: 'PR', name: 'Practice Problems',    note: '',                  avail: 120, cap: 120, earned: 76.7,   graded: 80  },
+  { id: 'PG', name: 'Programming Homework', note: '',                  avail: 600, cap: 600, earned: 346,    graded: 350 },
+  { id: 'CH', name: 'Checkins',             note: '720 of 780 counts', avail: 780, cap: 720, earned: 443.75, graded: 480 },
+  { id: 'AC', name: 'Activities',           note: '30 of 39 count',    avail: 39,  cap: 30,  earned: 4,      graded: 8   },
+  { id: 'FI', name: 'Final Exam',           note: 'closed book',       avail: 250, cap: 250, earned: 0,      graded: 0   },
+];
+
+const sheet = document.getElementById('sheet');
+for (const c of CATS) {
+  const row = document.createElement('div');
+  row.className = 'row';
+  row.innerHTML =
+    `<span class="cat"><b>${c.name}</b><small id="n_${c.id}">${c.id}${c.note ? ' · ' + c.note : ''}</small></span>` +
+    `<input type="number" id="e_${c.id}" min="0" step="0.5" value="${c.earned}" aria-label="${c.name} earned">` +
+    `<input type="number" id="g_${c.id}" min="0" step="0.5" value="${c.graded}" aria-label="${c.name} graded so far">` +
+    `<span class="proj" id="p_${c.id}">—</span>`;
+  sheet.appendChild(row);
+}
+
+const num = id => Math.max(0, Number(document.getElementById(id).value) || 0);
+const round = n => Math.round(n * 10) / 10;
+
+function model() {
+  const earned = {}, graded = {};
+  for (const c of CATS) { earned[c.id] = num('e_' + c.id); graded[c.id] = num('g_' + c.id); }
+
+  // Overall rate, used for a category with nothing graded yet (typically the final).
+  let te = 0, tg = 0;
+  for (const c of CATS) { if (c.id !== 'FI') { te += earned[c.id]; tg += graded[c.id]; } }
+  const overall = tg > 0 ? te / tg : 0.9;
+
+  const proj = {};
+  for (const c of CATS) {
+    const rate = graded[c.id] > 0 ? earned[c.id] / graded[c.id] : overall;
+    const remaining = Math.max(0, c.avail - graded[c.id]);
+    proj[c.id] = Math.min(c.cap, earned[c.id] + rate * remaining);
+  }
+
+  const hw = Math.min(proj.PR + proj.PG, 720);
+  const ch = proj.CH;
+  const total = Math.min(hw, ch) + proj.AC + proj.FI;
+
+  // Standing on graded work alone: same formula, scaled by what's been released.
+  const gradedTotal = Math.min(earned.PR + earned.PG, earned.CH) + earned.AC + earned.FI;
+  const gradedPoss = Math.min(graded.PR + graded.PG, graded.CH) + graded.AC + graded.FI;
+
+  return { earned, graded, proj, hw, ch, total, overall,
+           currentPct: gradedPoss > 0 ? (gradedTotal / gradedPoss) * 100 : null };
+}
+
+function letterFor(pct) {
+  if (pct >= 90) return 'A';
+  if (pct >= 80) return 'B';
+  if (pct >= 70) return 'C';
+  if (pct >= 60) return 'D';
+  return 'R';
+}
+
+function render() {
+  const m = model();
+
+  for (const c of CATS) {
+    document.getElementById('p_' + c.id).textContent = `${round(m.proj[c.id])} / ${c.cap}`;
+  }
+
+  const pct = m.total / 10;
+  document.getElementById('pct').textContent = pct.toFixed(1) + '%';
+  document.getElementById('letter').textContent = letterFor(pct);
+  document.getElementById('current').textContent =
+    m.currentPct === null ? '—' : m.currentPct.toFixed(1) + '%';
+
+  // min() bars. Linear against 720 would pin every realistic score to the far
+  // right, so the track is log-scaled from half the ceiling up: 360 reads as
+  // empty, 720 as full, and the gap between 650 and 710 stays visible.
+  const hwBinds = m.hw <= m.ch;
+  const FLOOR = 360;
+  const barWidth = v => {
+    if (v <= FLOOR) return 0;
+    return Math.min(100, Math.log(v / FLOOR) / Math.log(720 / FLOOR) * 100);
+  };
+  document.getElementById('barHw').style.width = barWidth(m.hw).toFixed(1) + '%';
+  document.getElementById('barCh').style.width = barWidth(m.ch).toFixed(1) + '%';
+  document.getElementById('barHw').className = 'fill' + (hwBinds ? ' binding' : '');
+  document.getElementById('barCh').className = 'fill' + (hwBinds ? '' : ' binding');
+  document.getElementById('numHw').textContent = round(m.hw);
+  document.getElementById('numCh').textContent = round(m.ch);
+
+  const gap = round(Math.abs(m.hw - m.ch));
+  document.getElementById('bindNote').textContent = gap < 0.05
+    ? 'Homework and checkins are even.'
+    : hwBinds
+      ? `Homework is the binding side, by ${gap} points.`
+      : `Checkins are the binding side, by ${gap} points.`;
+
+  // Final-exam solver: hold everything but FI at its projection.
+  const base = Math.min(m.hw, m.ch) + m.proj.AC;
+  const rows = [['A', 900], ['B', 800], ['C', 700], ['D', 600]];
+  document.getElementById('solver').innerHTML = rows.map(([L, need]) => {
+    const fi = need - base;
+    let txt, cls;
+    if (fi <= 0)      { txt = 'already there'; cls = 'ok'; }
+    else if (fi > 250){ txt = 'out of reach';  cls = 'no'; }
+    else              { txt = round(fi) + ' / 250'; cls = ''; }
+    const asPct = (fi > 0 && fi <= 250) ? (fi / 250 * 100).toFixed(0) + '%' : '—';
+    return `<tr><td>${L}</td><td class="n">${need / 10}%</td><td class="n ${cls}">${txt}</td><td class="n">${asPct}</td><td></td></tr>`;
+  }).join('');
+}
+
+sheet.addEventListener('input', render);
+render();
+
+/* ---- scatter the mascots ---------------------------------------------
+   A fixed seed, so the arrangement is the same every visit instead of
+   reshuffling under the reader. Peeking poses are pinned to the left and
+   right edges, where being cropped is the whole point of the pose.      */
+(function scatterDucks() {
+  const layer = document.getElementById('ducks');
+  if (!layer) return;
+
+  let seed = 15122;
+  const rnd = () => {                       // mulberry32
+    seed |= 0; seed = seed + 0x6D2B79F5 | 0;
+    let t = Math.imul(seed ^ seed >>> 15, 1 | seed);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+  const pick = a => a[Math.floor(rnd() * a.length)];
+  const between = (lo, hi) => lo + rnd() * (hi - lo);
+
+  const SCATTER = ['honk-a', 'honk-c', 'chonk-a', 'chonk-b'];
+  const PEEK = ['honk-b', 'chonk-c'];
+
+  const add = (id, left, top, size, rot, opacity) => {
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    el.setAttribute('class', 'duck');
+    el.setAttribute('viewBox', '0 0 125 125');
+    el.style.cssText =
+      `left:${left}%;top:${top}%;width:${size}px;height:${size}px;` +
+      `transform:rotate(${rot}deg);opacity:${opacity}`;
+    const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
+    use.setAttribute('href', '#' + id);
+    el.appendChild(use);
+    layer.appendChild(el);
+  };
+
+  // Stratified rather than uniform: one per band, sides alternating. Pure
+  // random clustered three in a corner and left half the page bare.
+  const BANDS = 7;
+  for (let i = 0; i < 14; i++) {
+    const band = i % BANDS;
+    const leftSide = i < BANDS;
+    add(pick(SCATTER),
+        leftSide ? between(-2, 15) : between(81, 98),
+        band * (92 / BANDS) + between(1, 92 / BANDS - 7),
+        between(52, 100),
+        between(-28, 28),
+        between(0.16, 0.28).toFixed(3));
+  }
+
+  // 6 peekers, half off the edge, three down each side
+  for (let i = 0; i < 6; i++) {
+    const leftSide = i % 2 === 0;
+    const band = Math.floor(i / 2);
+    add(pick(PEEK),
+        leftSide ? between(-6, -3) : between(94, 99),
+        band * 30 + between(6, 20),
+        between(68, 108),
+        leftSide ? between(8, 22) : between(-22, -8),
+        between(0.18, 0.30).toFixed(3));
+  }
+})();
+
+/* ---- Gradescope PDF import -------------------------------------------
+   The printed dashboard lists each item's name and score as adjacent text
+   runs, so pair every "PR 07" / "CH 03" / "Activity 12" with the score that
+   follows it. Items released but not submitted show "No Submission", which
+   carries no max, so fall back to the category's standard item size.        */
+const DEFAULT_MAX = { PR: 10, CH: 60, AC: 0.5 };
+const NAME_RE  = /^(PR|CH|Activity)\s+(\d+)\b/i;
+const SCORE_RE = /^(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)$/;
+
+function parseItems(items) {
+  const out = { PR: [], CH: [], AC: [] };
+  for (let i = 0; i < items.length; i++) {
+    const m = items[i].match(NAME_RE);
+    if (!m || /ungraded|sample/i.test(items[i])) continue;
+    const cat = /^Activity$/i.test(m[1]) ? 'AC' : m[1].toUpperCase();
+    const label = `${m[1]} ${m[2]}`;
+    for (let j = i + 1; j < Math.min(i + 4, items.length); j++) {
+      if (NAME_RE.test(items[j])) break;
+      const s = items[j].match(SCORE_RE);
+      if (s) {
+        const max = parseFloat(s[2]);
+        if (max > 0) out[cat].push({ label, earned: parseFloat(s[1]), max });
+        i = j;
+        break;
+      }
+      if (/^no submission$/i.test(items[j])) {
+        out[cat].push({ label, earned: 0, max: DEFAULT_MAX[cat], missed: true });
+        i = j;
+        break;
+      }
+    }
+  }
+  return out;
+}
+
+let lastParsed = null;
+
+/* Label a category by the items actually imported, e.g. "PR 01-09", so the
+   row says what this person has had graded rather than a fixed guess. */
+function setNote(cat, rows) {
+  const el = document.getElementById('n_' + cat);
+  if (!el) return;
+  const nums = rows.map(r => (r.label.match(/(\d+)\s*$/) || [])[1])
+                   .filter(Boolean)
+                   .map(Number)
+                   .sort((a, b) => a - b);
+  const pad = n => String(n).padStart(2, '0');
+  const range = nums.length
+    ? (nums[0] === nums[nums.length - 1]
+        ? `${cat} ${pad(nums[0])}`
+        : `${cat} ${pad(nums[0])}–${pad(nums[nums.length - 1])}`)
+    : `${rows.length} graded`;
+  el.textContent = range;
+}
+
+function applyParsed(parsed) {
+  const countZero = document.getElementById('countZero').checked;
+  const names = { PR: 'PR', CH: 'checkins', AC: 'activities' };
+  const found = [];
+  let missed = 0;
+
+  for (const cat of ['PR', 'CH', 'AC']) {
+    const rows = parsed[cat].filter(r => countZero || !r.missed);
+    if (!rows.length) continue;
+    const earned = rows.reduce((a, r) => a + r.earned, 0);
+    const graded = rows.reduce((a, r) => a + r.max, 0);
+    document.getElementById('e_' + cat).value = round(earned);
+    document.getElementById('g_' + cat).value = round(graded);
+    setNote(cat === 'AC' ? 'AC' : cat, rows);
+    if (cat === 'AC') document.getElementById('n_AC').textContent = `${rows.length} activities`;
+    found.push(`${rows.length} ${names[cat]}`);
+    missed += parsed[cat].filter(r => r.missed).length;
+  }
+
+  render();
+
+  const st = document.getElementById('status');
+  st.hidden = false;
+  if (!found.length) {
+    st.className = 'status err';
+    st.textContent = 'No PR, CH or Activity rows found in that PDF.';
+    return;
+  }
+  st.className = 'status ok';
+  st.textContent = `Loaded ${found.join(', ')}.` +
+    (missed ? ` ${missed} marked “No Submission”${countZero ? ', counted as 0' : ', skipped'}.` : '');
+}
+
+document.getElementById('countZero').addEventListener('change', () => {
+  if (lastParsed) applyParsed(lastParsed);
+});
+
+/* ---- Autolab gradebook import ----------------------------------------
+   The gradebook is one table, so a copy-paste carries it. A pasted page may
+   include the other categories too, so when the Programming heading is
+   present, read only from there to the next category average.              */
+function parsePG(raw) {
+  let text = raw.replace(/\s*\/\s*/g, '/');   // rejoin "50.0 / 50.0" split across cells
+  const head = text.search(/PROGRAMMING/i);
+  if (head !== -1) {
+    text = text.slice(head);
+    const end = text.search(/Category\s+Average/i);
+    if (end !== -1) text = text.slice(0, end);
+  }
+
+  const SCORE = /(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)/;
+  const SKIP = /ungraded|sample|average|total|final score/i;
+  const rows = [];
+  let label = '';   // the most recent line that reads like an assignment name
+
+  for (const line of text.split('\n').map(s => s.trim())) {
+    if (!line) continue;
+    const m = line.match(SCORE);
+    const hasName = line.replace(SCORE, '').replace(/[\d.\s|\t]/g, '');
+    if (hasName) {
+      label = line.replace(SCORE, '').replace(/\t/g, ' ')
+                  .replace(/\s+[\d\s]+$/, '').trim();
+    }
+    if (!m) continue;
+    const max = parseFloat(m[2]);
+    if (max > 0 && !SKIP.test(label)) rows.push({ label, earned: parseFloat(m[1]), max });
+  }
+  return rows;
+}
+
+function applyPG(rows, source) {
+  const st = document.getElementById('pgStatus');
+  st.hidden = false;
+  if (!rows.length) {
+    st.className = 'status err';
+    st.textContent = `No graded assignments found in that ${source}.`;
+    return;
+  }
+  const earned = rows.reduce((a, r) => a + r.earned, 0);
+  const graded = rows.reduce((a, r) => a + r.max, 0);
+  document.getElementById('e_PG').value = round(earned);
+  document.getElementById('g_PG').value = round(graded);
+  document.getElementById('n_PG').textContent =
+    `${rows.length} assignment${rows.length === 1 ? '' : 's'}`;
+  render();
+  st.className = 'status ok';
+  st.textContent = `Loaded ${rows.length} assignments — ${round(earned)} / ${round(graded)}.`;
+}
+
+const pgBox = document.getElementById('pgPaste');
+pgBox.addEventListener('input', () => {
+  const v = pgBox.value.trim();
+  if (v) applyPG(parsePG(v), 'paste');
+  else document.getElementById('pgStatus').hidden = true;
+});
+pgBox.addEventListener('paste', e => {
+  const items = e.clipboardData && e.clipboardData.items;
+  const hasText = !items || [...items].some(i => i.kind === 'string');
+  if (!hasText) {
+    e.preventDefault();
+    const st = document.getElementById('pgStatus');
+    st.hidden = false;
+    st.className = 'status err';
+    st.textContent = 'That is an image. Copy the table text instead, or load a PDF.';
+  }
+});
+
+document.getElementById('pgPdf').addEventListener('change', async e => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const st = document.getElementById('pgStatus');
+  st.hidden = false;
+  st.className = 'status';
+  st.textContent = 'Reading…';
+  try {
+    const text = (await pdfLines(file)).join('\n');
+    applyPG(parsePG(text), 'PDF');
+  } catch (err) {
+    st.className = 'status err';
+    st.textContent = "Couldn't read that PDF — paste the table text instead.";
+  }
+});
+
+async function pdfLines(file) {
+  const lib = window.pdfjsLib;
+  if (!lib) throw new Error('pdf library did not load');
+  lib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const doc = await lib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+  const out = [];
+  for (let p = 1; p <= doc.numPages; p++) {
+    const tc = await (await doc.getPage(p)).getTextContent();
+    for (const it of tc.items) {
+      const s = (it.str || '').trim();
+      if (s) out.push(s);
+    }
+  }
+  return out;
+}
+
+document.getElementById('pdf').addEventListener('change', async e => {
+  const file = e.target.files && e.target.files[0];
+  if (!file) return;
+  const st = document.getElementById('status');
+  st.hidden = false;
+  st.className = 'status';
+  st.textContent = 'Reading…';
+
+  try {
+    const lib = window.pdfjsLib;
+    if (!lib) throw new Error('pdf library did not load');
+    lib.GlobalWorkerOptions.workerSrc =
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    const buf = await file.arrayBuffer();
+    const doc = await lib.getDocument({ data: new Uint8Array(buf) }).promise;
+
+    const items = [];
+    for (let p = 1; p <= doc.numPages; p++) {
+      const page = await doc.getPage(p);
+      const tc = await page.getTextContent();
+      for (const it of tc.items) {
+        const s = (it.str || '').trim();
+        if (s) items.push(s);
+      }
+    }
+    lastParsed = parseItems(items);
+    applyParsed(lastParsed);
+  } catch (err) {
+    st.className = 'status err';
+    st.textContent = "Couldn't read that PDF — type the numbers in below instead.";
+  }
+});
+</script>

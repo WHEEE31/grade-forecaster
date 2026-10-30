@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: grade-forecaster
+    runtime: static
+    buildCommand: "echo no build step"
+    staticPublishPath: ./public
