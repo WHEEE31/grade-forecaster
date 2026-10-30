@@ -53,6 +53,8 @@
 /* Honk and Chonk, scattered behind everything. Fixed so they read as a
    watermark rather than scrolling furniture, and inert to the pointer. */
 .ducks { position: fixed; inset: 0; z-index: 0; overflow: hidden; pointer-events: none; }
+/* A second flock that scrolls with the page: fewer, larger, and in colour. */
+.ducks-scroll { position: absolute; top: 0; left: 0; right: 0; z-index: 0; overflow: hidden; pointer-events: none; }
 .duck { position: absolute; color: var(--ink); }
 .duck .i { fill: none; stroke: currentColor; stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
 .duck .b { fill: var(--accent); stroke: currentColor; stroke-width: 2.5; stroke-linejoin: round; }
@@ -61,6 +63,7 @@
 @media (prefers-reduced-motion: no-preference) { .duck { transition: opacity .4s ease; } }
 
 body {
+  position: relative;
   background: var(--paper);
   color: var(--ink);
   font-family: var(--body);
@@ -371,6 +374,7 @@ a { color: var(--accent); }
     </symbol>
 </svg>
 <div class="ducks" id="ducks" aria-hidden="true"></div>
+<div class="ducks-scroll" id="ducksScroll" aria-hidden="true"></div>
 
 <div class="wrap">
 
@@ -631,6 +635,7 @@ render();
    right edges, where being cropped is the whole point of the pose.      */
 (function scatterDucks() {
   const layer = document.getElementById('ducks');
+  const scrollLayer = document.getElementById('ducksScroll');
   if (!layer) return;
 
   let seed = 15122;
@@ -645,8 +650,9 @@ render();
 
   const SCATTER = ['honk-a', 'honk-c', 'chonk-a', 'chonk-b'];
   const PEEK = ['honk-b', 'chonk-c'];
+  const ALL = SCATTER.concat(PEEK);
 
-  const add = (id, left, top, size, rot, opacity) => {
+  const add = (host, id, left, top, size, rot, opacity) => {
     const el = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
     el.setAttribute('class', 'duck');
     el.setAttribute('viewBox', '0 0 125 125');
@@ -656,33 +662,52 @@ render();
     const use = document.createElementNS('http://www.w3.org/2000/svg', 'use');
     use.setAttribute('href', '#' + id);
     el.appendChild(use);
-    layer.appendChild(el);
+    host.appendChild(el);
   };
 
-  // Stratified rather than uniform: one per band, sides alternating. Pure
-  // random clustered three in a corner and left half the page bare.
-  const BANDS = 7;
-  for (let i = 0; i < 14; i++) {
-    const band = i % BANDS;
-    const leftSide = i < BANDS;
-    add(pick(SCATTER),
-        leftSide ? between(-2, 15) : between(81, 98),
-        band * (92 / BANDS) + between(1, 92 / BANDS - 7),
-        between(52, 100),
-        between(-28, 28),
-        between(0.16, 0.28).toFixed(3));
+  // --- fixed layer: covers the whole viewport, including behind the text ---
+  // Three columns by eight rows, jittered. The middle column runs fainter so
+  // it never competes with what is written on top of it.
+  const ROWS = 8, COLS = [[-3, 24], [30, 62], [70, 97]];
+  for (let r = 0; r < ROWS; r++) {
+    for (let c = 0; c < COLS.length; c++) {
+      const middle = c === 1;
+      add(layer, pick(SCATTER),
+          between(COLS[c][0], COLS[c][1]),
+          r * (96 / ROWS) + between(0, 96 / ROWS - 8),
+          between(46, 92),
+          between(-30, 30),
+          (middle ? between(0.05, 0.09) : between(0.11, 0.2)).toFixed(3));
+    }
   }
 
-  // 6 peekers, half off the edge, three down each side
+  // peekers, pinned half off each edge
   for (let i = 0; i < 6; i++) {
     const leftSide = i % 2 === 0;
-    const band = Math.floor(i / 2);
-    add(pick(PEEK),
+    add(layer, pick(PEEK),
         leftSide ? between(-6, -3) : between(94, 99),
-        band * 30 + between(6, 20),
+        Math.floor(i / 2) * 30 + between(6, 20),
         between(68, 108),
         leftSide ? between(8, 22) : between(-22, -8),
-        between(0.18, 0.30).toFixed(3));
+        between(0.14, 0.22).toFixed(3));
+  }
+
+  // --- scrolling layer: sparse, bigger, and bright enough to read as colour ---
+  if (scrollLayer) {
+    const sizeLayer = () => {
+      scrollLayer.style.height = document.documentElement.scrollHeight + 'px';
+    };
+    for (let i = 0; i < 8; i++) {
+      add(scrollLayer, pick(ALL),
+          between(2, 86),
+          i * 12 + between(1, 7),
+          between(70, 128),
+          between(-32, 32),
+          between(0.3, 0.46).toFixed(3));
+    }
+    sizeLayer();
+    addEventListener('resize', sizeLayer);
+    if (window.ResizeObserver) new ResizeObserver(sizeLayer).observe(document.body);
   }
 })();
 
