@@ -1,9 +1,13 @@
 # CMU 15-122 Grade Forecaster
 
-A single static page. No build step, no server, no dependencies.
-Everything (PDF parsing, projection) runs in the browser; nothing is uploaded.
+Replacement for the 15-122 grade forecaster that went down due to php vulnerability
+RIP illiano's grade forecaster, will be missed.
 
-## Run it locally
+This one can't read your gradescope or autolab but it can still forecast :D
+Runs in browser - a single static page.
+
+## BANG:
+
 
 Open `public/index.html` in a browser. That's it.
 
