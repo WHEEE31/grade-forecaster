@@ -467,7 +467,6 @@ a { color: var(--accent); }
 
   <footer>
     <p><b>Not official.</b> Courtesy of <a href="https://www.instagram.com/snairyboi/">@snairyboi</a>, CMU SCS ’30.</p>
-    <p>The activities category also include Friday recitation attendance, worth 2 points each. Attendance is not accessible to students, so this forecaster primarily uses in-class projections for this category.</p>
   </footer>
 </div>
 
@@ -494,8 +493,8 @@ for (const c of CATS) {
   row.className = 'row';
   row.innerHTML =
     `<span class="cat"><b>${c.name}</b><small id="n_${c.id}">${c.id}${c.note ? ' · ' + c.note : ''}</small></span>` +
-    `<input type="number" id="e_${c.id}" min="0" step="0.5" value="${c.earned}" aria-label="${c.name} earned">` +
-    `<input type="number" id="g_${c.id}" min="0" step="0.5" value="${c.graded}" aria-label="${c.name} graded so far">` +
+    `<input type="number" id="e_${c.id}" min="0" step="${c.pts ? 1 : 0.5}" value="${c.earned}" aria-label="${c.name} earned">` +
+    `<input type="number" id="g_${c.id}" min="0" step="1" value="${c.graded}" aria-label="${c.name} graded so far">` +
     `<span class="proj" id="p_${c.id}">—</span>`;
   sheet.appendChild(row);
 }
@@ -872,7 +871,7 @@ function applyPG(rows, source) {
     `${rows.length} assignment${rows.length === 1 ? '' : 's'}`;
   render();
   st.className = 'status ok';
-  st.textContent = `Loaded ${rows.length} assignments — ${round(earned)} / ${round(graded)}.`;
+  st.textContent = `Loaded ${rows.length} assignments.`;
 }
 
 const pgBox = document.getElementById('pgPaste');
