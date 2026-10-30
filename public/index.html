@@ -372,7 +372,7 @@ a { color: var(--accent); }
   <div class="imports">
   <section class="import">
     <p>On your Gradescope dashboard press <kbd>Ctrl</kbd>+<kbd>P</kbd>, save as PDF, then load it here to fill in PR, CH and&nbsp;Activities.</p>
-    <label class="zero"><input type="checkbox" id="countZero" checked> Count “No Submission” as 0</label>
+    <label class="zero"><input type="checkbox" id="countZero" checked> Skip the newest PR if it isn’t due yet</label>
     <div class="importrow">
       <input type="file" id="pdf" accept="application/pdf,.pdf">
     </div>
@@ -444,16 +444,17 @@ a { color: var(--accent); }
 
   <footer>
     <p><b>Not official.</b> Courtesy of <a href="https://www.instagram.com/snairyboi/">@snairyboi</a>, CMU SCS ’30.</p>
+    <p>Activities also include Friday recitation activities worth 2 points each. Those are recorded on the instructor side and are not in the Gradescope export, so an import covers only the 0.5-point in-class activities.</p>
   </footer>
 </div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 <script>
 const CATS = [
-  { id: 'PR', name: 'Practice Problems',    note: '',                  avail: 120, cap: 120, earned: 76.7,   graded: 80  },
-  { id: 'PG', name: 'Programming Homework', note: '',                  avail: 600, cap: 600, earned: 346,    graded: 350 },
-  { id: 'CH', name: 'Checkins',             note: '720 of 780 counts', avail: 780, cap: 720, earned: 443.75, graded: 480 },
-  { id: 'AC', name: 'Activities',           note: '30 of 39 count',    avail: 39,  cap: 30,  earned: 4,      graded: 8   },
+  { id: 'PR', name: 'Practice Problems',    note: '',                  avail: 120, cap: 120, earned: 68,     graded: 80  },
+  { id: 'PG', name: 'Programming Homework', note: '',                  avail: 600, cap: 600, earned: 297.5,  graded: 350 },
+  { id: 'CH', name: 'Checkins',             note: '720 of 780 counts', avail: 780, cap: 720, earned: 408,    graded: 480 },
+  { id: 'AC', name: 'Activities',           note: '30 of 39 count · see note', avail: 39,  cap: 30,  earned: 5.6,    graded: 8   },
   { id: 'FI', name: 'Final Exam',           note: 'closed book',       avail: 250, cap: 250, earned: 0,      graded: 0   },
 ];
 
@@ -521,15 +522,11 @@ function render() {
   document.getElementById('current').textContent =
     m.currentPct === null ? '—' : m.currentPct.toFixed(1) + '%';
 
-  // min() bars. Linear against 720 would pin every realistic score to the far
-  // right, so the track is log-scaled from half the ceiling up: 360 reads as
-  // empty, 720 as full, and the gap between 650 and 710 stays visible.
+  // min() bars. Linear pins every realistic score to the far right, and a log
+  // scale cannot start at zero. A power curve does both: 0 is empty, 720 is
+  // full, and the top of the range is stretched where the scores actually sit.
   const hwBinds = m.hw <= m.ch;
-  const FLOOR = 360;
-  const barWidth = v => {
-    if (v <= FLOOR) return 0;
-    return Math.min(100, Math.log(v / FLOOR) / Math.log(720 / FLOOR) * 100);
-  };
+  const barWidth = v => Math.min(100, Math.pow(Math.max(0, v) / 720, 3) * 100);
   document.getElementById('barHw').style.width = barWidth(m.hw).toFixed(1) + '%';
   document.getElementById('barCh').style.width = barWidth(m.ch).toFixed(1) + '%';
   document.getElementById('barHw').className = 'fill' + (hwBinds ? ' binding' : '');
@@ -643,16 +640,26 @@ function parseItems(items) {
       const s = items[j].match(SCORE_RE);
       if (s) {
         const max = parseFloat(s[2]);
-        if (max > 0) out[cat].push({ label, earned: parseFloat(s[1]), max });
+        if (max > 0) out[cat].push({ label, earned: parseFloat(s[1]), max,
+                                     n: Number(m[2]) });
         i = j;
         break;
       }
       if (/^no submission$/i.test(items[j])) {
-        out[cat].push({ label, earned: 0, max: DEFAULT_MAX[cat], missed: true });
+        out[cat].push({ label, earned: 0, max: DEFAULT_MAX[cat], missed: true,
+                        n: Number(m[2]) });
         i = j;
         break;
       }
     }
+  }
+  // Only PR can be listed before its deadline: it is released a week ahead.
+  // Checkins and activities happen in class, so by the time one appears the
+  // deadline has passed and a missing submission is a real zero -- including
+  // the last few, which are only last because the next one has not happened.
+  const byNumber = [...out.PR].sort((a, b) => a.n - b.n);
+  for (let i = byNumber.length - 1; i >= 0 && byNumber[i].missed; i--) {
+    byNumber[i].pending = true;
   }
   return out;
 }
@@ -681,10 +688,10 @@ function applyParsed(parsed) {
   const countZero = document.getElementById('countZero').checked;
   const names = { PR: 'PR', CH: 'checkins', AC: 'activities' };
   const found = [];
-  let missed = 0;
+  let missed = 0, zeros = 0;
 
   for (const cat of ['PR', 'CH', 'AC']) {
-    const rows = parsed[cat].filter(r => countZero || !r.missed);
+    const rows = parsed[cat].filter(r => !(countZero && r.pending));
     if (!rows.length) continue;
     const earned = rows.reduce((a, r) => a + r.earned, 0);
     const graded = rows.reduce((a, r) => a + r.max, 0);
@@ -693,7 +700,8 @@ function applyParsed(parsed) {
     setNote(cat === 'AC' ? 'AC' : cat, rows);
     if (cat === 'AC') document.getElementById('n_AC').textContent = `${rows.length} activities`;
     found.push(`${rows.length} ${names[cat]}`);
-    missed += parsed[cat].filter(r => r.missed).length;
+    missed += parsed[cat].filter(r => countZero && r.pending).length;
+    zeros += rows.filter(r => r.missed).length;
   }
 
   render();
@@ -707,7 +715,8 @@ function applyParsed(parsed) {
   }
   st.className = 'status ok';
   st.textContent = `Loaded ${found.join(', ')}.` +
-    (missed ? ` ${missed} marked “No Submission”${countZero ? ', counted as 0' : ', skipped'}.` : '');
+    (zeros ? ` ${zeros} missed, counted as 0.` : '') +
+    (missed ? ` ${missed} not due yet, skipped.` : '');
 }
 
 document.getElementById('countZero').addEventListener('change', () => {
