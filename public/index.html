@@ -477,7 +477,7 @@ const CATS = [
   { id: 'PR', name: 'Practice Problems',    note: '',                   avail: 120, cap: 120, earned: 68,    graded: 80  },
   { id: 'PG', name: 'Programming Homework', note: '',                   avail: 600, cap: 600, earned: 297.5, graded: 350 },
   { id: 'CH', name: 'Checkins',             note: '720 of 780 counts',  avail: 780, cap: 720, earned: 408,   graded: 480 },
-  { id: 'AC', name: 'In-class Activities',  note: '0.5 pts each',       avail: 13, cap: 13, earned: 4.2, graded: 6 },
+  { id: 'AC', name: 'In-class Activities',  note: '0.5 pts each · numbered from 02', avail: 13, cap: 13, earned: 4.2, graded: 6 },
   // Entered as sessions, not points: "7 attended of 9 held", 2 points each.
   { id: 'RC', name: 'Recitations',          note: 'attended / held · 2 pts each',
     avail: 15, cap: 30, pts: 2, earned: 7, graded: 9 },
@@ -790,7 +790,15 @@ function applyParsed(parsed) {
     document.getElementById('e_' + cat).value = round(earned);
     document.getElementById('g_' + cat).value = round(graded);
     setNote(cat === 'AC' ? 'AC' : cat, rows);
-    if (cat === 'AC') document.getElementById('n_AC').textContent = `${rows.length} activities`;
+    if (cat === 'AC') {
+      // Gradescope numbers activities from 02, so the count is one less than
+      // the highest number. Show both so that never reads as a missing item.
+      const ns = rows.map(r => r.n).filter(Number.isFinite).sort((a, b) => a - b);
+      const pad = n => String(n).padStart(2, '0');
+      document.getElementById('n_AC').textContent = ns.length
+        ? `${rows.length} activities · ${pad(ns[0])}\u2013${pad(ns[ns.length - 1])}`
+        : `${rows.length} activities`;
+    }
     found.push(`${rows.length} ${names[cat]}`);
     missed += parsed[cat].filter(r => countZero && r.pending).length;
     zeros += rows.filter(r => r.missed).length;
