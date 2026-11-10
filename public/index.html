@@ -552,9 +552,13 @@ function model() {
   const ch = proj.CH;
   const ac = Math.min(AC_CAP, proj.AC + proj.RC);
 
-  // The final has no input of its own: it is projected at the rate set by
-  // everything else, and the cutoff table below solves for it directly.
-  const fi = overall * 250;
+  // The final has no input of its own. It is projected at the checkin rate:
+  // checkins are the only other closed-book, timed work, so they are the best
+  // predictor. Blending in homework (720 of the graded points, usually near
+  // perfect) inflated the projection. With no checkins graded yet, fall back
+  // to the overall rate. The cutoff table below solves for the final directly.
+  const fiRate = graded.CH > 0 ? Math.min(1, earned.CH / graded.CH) : overall;
+  const fi = fiRate * 250;
   const total = Math.min(hw, ch) + ac + fi;
 
   // Standing on graded work alone, by the same formula.
@@ -563,7 +567,7 @@ function model() {
   const gradedPoss = Math.min(graded.PR + graded.PG, graded.CH)
                    + Math.min(AC_CAP, graded.AC + graded.RC * 2);
 
-  return { earned, graded, proj, hw, ch, ac, fi, total, overall,
+  return { earned, graded, proj, hw, ch, ac, fi, fiFromCh: graded.CH > 0, total, overall,
            currentPct: gradedPoss > 0 ? (gradedTotal / gradedPoss) * 100 : null };
 }
 
@@ -592,7 +596,8 @@ function render() {
   const fiNote = document.getElementById('fiNote');
   if (fiNote) {
     fiNote.textContent =
-      `Final projected at ${round(m.fi)} / 250 from your rate elsewhere.`;
+      `Final projected at ${round(m.fi)} / 250 from your ` +
+      (m.fiFromCh ? 'checkin rate.' : 'overall rate (no checkins graded yet).');
   }
 
   const pct = m.total / 10;
